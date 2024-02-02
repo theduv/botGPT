@@ -1,16 +1,13 @@
 import { Client, Events, GatewayIntentBits } from "discord.js";
-import {
-  addDoc,
-  setDoc,
-  arrayUnion,
-  doc,
-  getDoc,
-  updateDoc,
-} from "firebase/firestore";
 import dotenv from "dotenv";
-import { db } from "./firebase.js";
+import OpenAI from "openai";
 
 dotenv.config();
+
+const openai = new OpenAI({
+  organization: process.env.ORGANIZATION,
+  apiKey: process.env.OPEN_API_API_KEY,
+});
 
 const discordToken = process.env.DISCORD_BOT_TOKEN;
 
@@ -26,40 +23,36 @@ client.on(Events.ClientReady, (readyClient) => {
   console.log(`Ready! Logged in as ${readyClient.user.tag}`);
 });
 
-client.on(Events.MessageCreate, async (interaction) => {
-  if (interaction.author.bot) return;
-  const res = await interaction.fetch();
+async function generateMessage(parsedMessages) {
+  const completion = await openai.chat.completions.create({
+    messages: [
+      {
+        role: "user",
+        content: `Je vais te donner une liste de messages stringifiée envoyés sur discord. Ils seront sous le format suivant: {author: authorName, content: messageContent}. Je veux que tu m'en fasses un résumé. Voici la liste des messages: ${JSON.stringify(
+          parsedMessages
+        )}.`,
+      },
+    ],
+    model: "gpt-4",
+  });
 
-  const fbObject = {
-    content: res.content,
-    author: interaction.author.id,
-    channel: interaction.channel.id,
-    date: interaction.createdTimestamp,
-  };
-  const document = doc(db, "messages", fbObject.channel);
-  const owo = await getDoc(document);
-  try {
-    if (owo.exists()) {
-      updateDoc(document, {
-        messages: arrayUnion(fbObject),
-      });
-    } else {
-      setDoc(doc(db, "messages", fbObject.channel), {
-        id: interaction.channel.id,
-        name: interaction.channel.name,
-        messages: fbObject,
-      });
-    }
-  } catch (e) {
-    console.log(e);
-  }
-});
+  return completion.choices[0];
+}
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === "tldr") {
-    await interaction.reply("miaou");
+    const lastMessages = await interaction.channel.messages.fetch({
+      limit: 30,
+    });
+    const parsedMessages = lastMessages.map((message) => ({
+      author: message.author.displayName,
+      content: message.content,
+    }));
+    await interaction.deferReply("Génération de la réponse...");
+    const res = await generateMessage(parsedMessages);
+    interaction.editReply(res.message);
   }
 });
 
